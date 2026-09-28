@@ -4,15 +4,10 @@ import com.aipro.upgrade.server.db.DatabaseManager;
 import com.aipro.upgrade.server.model.Models.Tool;
 import com.aipro.upgrade.server.model.Models.ToolVersion;
 import com.aipro.upgrade.server.model.Models.ToolVersionFile;
+import com.aipro.upgrade.server.util.ZipExtractor;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
-import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -21,8 +16,6 @@ import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /**
  * 工具服务：对外分发工具的注册、本体上传、版本管理、归属控制（PRD F-S-11~17、F-S-19）
@@ -177,10 +170,11 @@ public final class ToolService {
         if (existsToolVersion(toolId, version, platform)) {
             throw new IllegalStateException("同 toolId+version+platform 已存在，不允许覆盖");
         }
-        // 解压并落地
-        List<UnpackedFile> files = unzipAndStore(zipBytes, toolId, version, platform);
+        // 解压并落地（UTF-8 优先，GBK 文件名自动回退）
+        Path baseDir = Paths.get(toolFileRoot, toolId, version, platform);
+        List<ZipExtractor.ExtractedFile> files = ZipExtractor.extract(zipBytes, baseDir);
         long totalSize = 0;
-        for (UnpackedFile f : files) {
+        for (ZipExtractor.ExtractedFile f : files) {
             totalSize += f.size;
         }
         // 写库
@@ -212,7 +206,7 @@ public final class ToolService {
         try (Connection conn = DatabaseManager.getInstance().getConnection();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT INTO tool_version_file(tool_version_id, file_path, sha256, size, created_at) VALUES(?, ?, ?, ?, ?)")) {
-            for (UnpackedFile f : files) {
+            for (ZipExtractor.ExtractedFile f : files) {
                 ps.setInt(1, newId);
                 ps.setString(2, f.relativePath);
                 ps.setString(3, f.sha256);
@@ -387,59 +381,6 @@ public final class ToolService {
         }
     }
 
-    /** 解压 zip 并落地到 toolfiles 目录，同时计算每个文件的 SHA-256。 */
-    private List<UnpackedFile> unzipAndStore(byte[] zipBytes, String toolId, String version, String platform) {
-        List<UnpackedFile> result = new ArrayList<>();
-        Path baseDir = Paths.get(toolFileRoot, toolId, version, platform);
-        try {
-            Files.createDirectories(baseDir);
-        } catch (IOException e) {
-            throw new RuntimeException("创建目录失败：" + baseDir, e);
-        }
-        try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
-            ZipEntry entry;
-            byte[] buf = new byte[8192];
-            while ((entry = zis.getNextEntry()) != null) {
-                if (entry.isDirectory()) {
-                    continue;
-                }
-                String name = entry.getName();
-                // 安全：禁止 .. 路径穿越
-                if (name.contains("..") || name.startsWith("/")) {
-                    throw new IllegalArgumentException("非法文件路径：" + name);
-                }
-                Path target = baseDir.resolve(name).normalize();
-                if (!target.startsWith(baseDir)) {
-                    throw new IllegalArgumentException("非法文件路径：" + name);
-                }
-                Files.createDirectories(target.getParent());
-                MessageDigest md = MessageDigest.getInstance("SHA-256");
-                long size = 0;
-                try (java.io.OutputStream os = Files.newOutputStream(target)) {
-                    int n;
-                    while ((n = zis.read(buf)) > 0) {
-                        os.write(buf, 0, n);
-                        md.update(buf, 0, n);
-                        size += n;
-                    }
-                }
-                String sha = bytesToHex(md.digest());
-                UnpackedFile f = new UnpackedFile();
-                f.relativePath = name.replace('\\', '/');
-                f.sha256 = sha;
-                f.size = size;
-                result.add(f);
-                zis.closeEntry();
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("解压失败：" + e.getMessage(), e);
-        }
-        if (result.isEmpty()) {
-            throw new IllegalArgumentException("zip 包为空");
-        }
-        return result;
-    }
-
     private Tool mapTool(ResultSet rs) throws SQLException {
         Tool t = new Tool();
         t.id = rs.getInt("id");
@@ -467,20 +408,5 @@ public final class ToolService {
         v.createdAt = rs.getString("created_at");
         v.publishedAt = rs.getString("published_at");
         return v;
-    }
-
-    private static String bytesToHex(byte[] b) {
-        StringBuilder sb = new StringBuilder(b.length * 2);
-        for (byte x : b) {
-            sb.append(String.format("%02x", x & 0xff));
-        }
-        return sb.toString();
-    }
-
-    /** 解包后单个文件信息。 */
-    private static class UnpackedFile {
-        String relativePath;
-        String sha256;
-        long size;
     }
 }

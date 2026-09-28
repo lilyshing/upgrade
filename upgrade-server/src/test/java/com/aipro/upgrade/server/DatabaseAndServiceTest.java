@@ -97,6 +97,32 @@ public class DatabaseAndServiceTest {
     }
 
     @Test
+    public void testListAllUsers() {
+        // listAll 不应抛异常（SELECT 列必须与 map() 读取的列一致）
+        UserService.getInstance().create("lister", "pwd123", "USER", "列表员");
+        List<Models.AdminUser> users = UserService.getInstance().listAll();
+
+        assertEquals(2, users.size());
+        // 默认 admin 字段应正确映射
+        Models.AdminUser admin = users.get(0);
+        assertEquals("admin", admin.username);
+        assertEquals("ADMIN", admin.role);
+        assertNotNull("password_hash 必须在查询列中", admin.passwordHash);
+    }
+
+    @Test
+    public void testCannotDisableLastAdmin() {
+        // 全新临时库中只有默认 admin 一个 ACTIVE ADMIN，禁用必须被拒绝
+        Models.AdminUser admin = UserService.getInstance().listAll().get(0);
+        try {
+            UserService.getInstance().setStatus(admin.id, "DISABLED");
+            fail("禁用最后一个 ACTIVE ADMIN 应被拒绝");
+        } catch (IllegalStateException e) {
+            assertTrue(e.getMessage().contains("ADMIN"));
+        }
+    }
+
+    @Test
     public void testToolRegisterAndPolicy() {
         int uid = UserService.getInstance().create("toolowner", "pwd123", "USER", null);
         Models.Tool t = ToolService.getInstance().register("mytool", "我的工具", "测试工具", uid, "java -jar mytool.jar");

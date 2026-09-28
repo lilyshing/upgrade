@@ -3,13 +3,10 @@ package com.aipro.upgrade.server.service;
 import com.aipro.upgrade.server.db.DatabaseManager;
 import com.aipro.upgrade.server.model.Models.Version;
 import com.aipro.upgrade.server.model.Models.VersionFile;
+import com.aipro.upgrade.server.util.ZipExtractor;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -18,8 +15,6 @@ import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /**
  * 版本服务：SDK 升级用的版本管理（PRD F-S-01、F-S-02、F-S-03、F-S-04、F-S-09）
@@ -67,9 +62,10 @@ public final class VersionService {
         if (existsVersion(versionNo)) {
             throw new IllegalStateException("版本号已存在：" + versionNo);
         }
-        List<UnpackedFile> files = unzipAndStore(versionNo, zipBytes);
+        Path baseDir = Paths.get(versionFileRoot, versionNo);
+        List<ZipExtractor.ExtractedFile> files = ZipExtractor.extract(zipBytes, baseDir);
         long totalSize = 0;
-        for (UnpackedFile f : files) {
+        for (ZipExtractor.ExtractedFile f : files) {
             totalSize += f.size;
         }
         String now = DateTimeFormatter.ISO_INSTANT.format(Instant.now());
@@ -96,7 +92,7 @@ public final class VersionService {
         try (Connection conn = DatabaseManager.getInstance().getConnection();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT INTO version_file(version_id, file_path, sha256, size, created_at) VALUES(?, ?, ?, ?, ?)")) {
-            for (UnpackedFile f : files) {
+            for (ZipExtractor.ExtractedFile f : files) {
                 ps.setInt(1, newId);
                 ps.setString(2, f.relativePath);
                 ps.setString(3, f.sha256);
@@ -251,56 +247,6 @@ public final class VersionService {
         }
     }
 
-    private List<UnpackedFile> unzipAndStore(String versionNo, byte[] zipBytes) {
-        List<UnpackedFile> result = new ArrayList<>();
-        Path baseDir = Paths.get(versionFileRoot, versionNo);
-        try {
-            Files.createDirectories(baseDir);
-        } catch (IOException e) {
-            throw new RuntimeException("创建目录失败：" + baseDir, e);
-        }
-        try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
-            ZipEntry entry;
-            byte[] buf = new byte[8192];
-            while ((entry = zis.getNextEntry()) != null) {
-                if (entry.isDirectory()) {
-                    continue;
-                }
-                String name = entry.getName();
-                if (name.contains("..") || name.startsWith("/")) {
-                    throw new IllegalArgumentException("非法文件路径：" + name);
-                }
-                Path target = baseDir.resolve(name).normalize();
-                if (!target.startsWith(baseDir)) {
-                    throw new IllegalArgumentException("非法文件路径：" + name);
-                }
-                Files.createDirectories(target.getParent());
-                MessageDigest md = MessageDigest.getInstance("SHA-256");
-                long size = 0;
-                try (java.io.OutputStream os = Files.newOutputStream(target)) {
-                    int n;
-                    while ((n = zis.read(buf)) > 0) {
-                        os.write(buf, 0, n);
-                        md.update(buf, 0, n);
-                        size += n;
-                    }
-                }
-                UnpackedFile f = new UnpackedFile();
-                f.relativePath = name.replace('\\', '/');
-                f.sha256 = bytesToHex(md.digest());
-                f.size = size;
-                result.add(f);
-                zis.closeEntry();
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("解压失败：" + e.getMessage(), e);
-        }
-        if (result.isEmpty()) {
-            throw new IllegalArgumentException("zip 包为空");
-        }
-        return result;
-    }
-
     private Version mapVersion(ResultSet rs) throws SQLException {
         Version v = new Version();
         v.id = rs.getInt("id");
@@ -312,19 +258,5 @@ public final class VersionService {
         v.createdAt = rs.getString("created_at");
         v.publishedAt = rs.getString("published_at");
         return v;
-    }
-
-    private static String bytesToHex(byte[] b) {
-        StringBuilder sb = new StringBuilder(b.length * 2);
-        for (byte x : b) {
-            sb.append(String.format("%02x", x & 0xff));
-        }
-        return sb.toString();
-    }
-
-    private static class UnpackedFile {
-        String relativePath;
-        String sha256;
-        long size;
     }
 }

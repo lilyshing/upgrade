@@ -6,6 +6,60 @@
 # ============================================================
 set -euo pipefail
 
+# ============================================================
+# 函数必须先定义后使用（bash 按顺序执行脚本）
+# ============================================================
+
+# urlenc：百分号编码文件名（纯 bash + coreutils 的 od/tr，无需 python）
+# 安全字符原样保留，其余字符按其 UTF-8 字节输出 %XX
+urlenc() {
+    local s="$1" out="" c hex j
+    for ((j=0; j<${#s}; j++)); do
+        c="${s:j:1}"
+        case "$c" in
+            [A-Za-z0-9./_-])
+                out+="$c"
+                ;;
+            *)
+                hex=$(printf '%s' "$c" | od -An -tx1 | tr -d ' \n')
+                local k
+                for ((k=0; k<${#hex}; k+=2)); do
+                    out+="%${hex:k:2}"
+                done
+                ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
+# download：含重试；$1=URL $2=OUT $3=RESUME（1=断点续传，缺省0）
+download() {
+    local url="$1" out="$2" resume="${3:-0}" retry=0 rc=0
+    while :; do
+        if [ "$DL" = "curl" ]; then
+            if [ "$resume" = "1" ]; then
+                curl -fL --retry 3 -C - -o "$out" "$url" && return 0
+            else
+                curl -fL --retry 3 -o "$out" "$url" && return 0
+            fi
+        else
+            if [ "$resume" = "1" ]; then
+                wget -c -O "$out" "$url" && return 0
+            else
+                wget -O "$out" "$url" && return 0
+            fi
+        fi
+        rc=$?
+        retry=$((retry + 1))
+        if [ "$retry" -ge 3 ]; then
+            echo "[WARN] 重试 $retry/3 失败"
+            return $rc
+        fi
+        echo "[WARN] 第 $retry 次失败，重试中..."
+        sleep $((2 * (2 ** (retry - 1))))
+    done
+}
+
 # === 内嵌变量（服务器注入） ===
 TOOL_ID="{{TOOL_ID}}"
 SERVER_URL="{{SERVER_URL}}"
@@ -62,7 +116,8 @@ mkdir -p "$INSTALL_DIR" || {
 MANIFEST="$INSTALL_DIR/.manifest.kv"
 BOOT_URL="$SERVER_URL/api/bootstrap/$TOOL_ID?platform=$PLATFORM&format=kv"
 echo "[INFO] 拉取清单: $BOOT_URL"
-download "$BOOT_URL" "$MANIFEST" || {
+# arg3=0: small dynamic response, never resume
+download "$BOOT_URL" "$MANIFEST" 0 || {
     echo "[ERR] 拉取清单失败。退出码 1。"
     exit 1
 }
@@ -109,10 +164,11 @@ for ((i=1; i<=FILE_COUNT; i++)); do
         fi
     fi
 
-    # URL 编码文件名（含中文）
-    ENC_NAME=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$FNAME" 2>/dev/null || echo "$FNAME")
-    FILE_URL="$SERVER_URL/api/file/tool/$TOOL_ID/$VER/$ENC_NAME"
-    download "$FILE_URL" "$DEST" || {
+    # URL 编码文件名（含中文）：纯 bash，无需 python
+    ENC_NAME=$(urlenc "$FNAME")
+    FILE_URL="$SERVER_URL/api/file/tool/$TOOL_ID/$VER/$PLATFORM/$ENC_NAME"
+    # arg3=1: tool files may be large, enable resume
+    download "$FILE_URL" "$DEST" 1 || {
         echo "[ERR] 下载失败 $FNAME。退出码 2。"
         exit 2
     }
@@ -148,26 +204,3 @@ esac
 echo "[INFO] 启动: $START_CMD"
 cd "$INSTALL_DIR"
 exec $START_CMD
-
-# ============================================================
-# 函数：download（含重试与断点续传）
-#   $1=URL  $2=OUT
-# ============================================================
-download() {
-    local url="$1" out="$2" retry=0 rc=0
-    while :; do
-        if [ "$DL" = "curl" ]; then
-            curl -fL --retry 3 -C - -o "$out" "$url" && return 0
-        else
-            wget -c -O "$out" "$url" && return 0
-        fi
-        rc=$?
-        retry=$((retry + 1))
-        if [ "$retry" -ge 3 ]; then
-            echo "[WARN] 重试 $retry/3 失败"
-            return $rc
-        fi
-        echo "[WARN] 第 $retry 次失败，重试中..."
-        sleep $((2 * (2 ** (retry - 1))))
-    done
-}

@@ -1,0 +1,8 @@
+# Windows batch files MUST use CRLF; cmd mis-parses LF-only scripts.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.bat.tmpl text eol=crlf
+
+# Shell scripts MUST use LF; CRLF breaks shebang and many Linux tools.
+*.sh text eol=lf
+*.sh.tmpl text eol=lf

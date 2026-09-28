@@ -17,6 +17,8 @@ import com.sun.net.httpserver.HttpHandler;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -32,7 +34,7 @@ import java.util.Map;
  * - POST /api/record/update       客户端上报更新结果
  * - GET /api/policy/status       查询灰度是否放开
  * - GET /api/bootstrap/{toolId}  下载器安装清单（KV 格式）
- * - GET /api/file/tool/{toolId}/{version}/{filename}  工具本体文件下载
+ * - GET /api/file/tool/{toolId}/{version}/{platform}/{filename}  工具本体文件下载
  * - GET /d/{toolId}               下载器脚本分发
  */
 public final class PublicApiHandler implements HttpHandler {
@@ -281,33 +283,48 @@ public final class PublicApiHandler implements HttpHandler {
         HttpUtil.sendJson(exchange, JsonUtil.stringify(data));
     }
 
-    // ============== GET /api/file/tool/{toolId}/{version}/{filename} ==============
+    // ============== GET /api/file/tool/{toolId}/{version}/{platform}/{filename} ==============
 
     private void handleToolFileDownload(HttpExchange exchange, String path) throws IOException {
-        // path = /api/file/tool/{toolId}/{version}/{filename...}
+        // Preferred: /api/file/tool/{toolId}/{version}/{platform}/{filename}
+        // Legacy (no platform, ambiguous when same version spans platforms):
+        //          /api/file/tool/{toolId}/{version}/{filename}
         String rest = path.substring("/api/file/tool/".length());
         int s1 = rest.indexOf('/');
         if (s1 <= 0) {
-            HttpUtil.sendBadRequest(exchange, "路径格式应为 /api/file/tool/{toolId}/{version}/{filename}");
+            HttpUtil.sendBadRequest(exchange, "路径格式应为 /api/file/tool/{toolId}/{version}/{platform}/{filename}");
             return;
         }
         String toolId = rest.substring(0, s1);
         String rest2 = rest.substring(s1 + 1);
         int s2 = rest2.indexOf('/');
         if (s2 <= 0) {
-            HttpUtil.sendBadRequest(exchange, "路径格式应为 /api/file/tool/{toolId}/{version}/{filename}");
+            HttpUtil.sendBadRequest(exchange, "路径格式应为 /api/file/tool/{toolId}/{version}/{platform}/{filename}");
             return;
         }
         String version = rest2.substring(0, s2);
-        String filename = java.net.URLDecoder.decode(rest2.substring(s2 + 1), "UTF-8");
-        Path file = ToolService.getInstance().resolveToolVersionFile(toolId, version, "win", filename);
-        if (!Files.exists(file)) {
-            // 尝试 linux 目录（同版本号可能跨平台，简化处理）
+        String rest3 = rest2.substring(s2 + 1);
+        String platform;
+        String filename;
+        boolean legacy = false;
+        int s3 = rest3.indexOf('/');
+        if (s3 > 0) {
+            platform = rest3.substring(0, s3);
+            filename = java.net.URLDecoder.decode(rest3.substring(s3 + 1), "UTF-8");
+        } else {
+            // Legacy 3-segment format: default win, fall back to linux
+            platform = "win";
+            filename = java.net.URLDecoder.decode(rest3, "UTF-8");
+            legacy = true;
+        }
+        Path file = ToolService.getInstance().resolveToolVersionFile(toolId, version, platform, filename);
+        if (legacy && !Files.exists(file)) {
             file = ToolService.getInstance().resolveToolVersionFile(toolId, version, "linux", filename);
+            platform = "linux";
         }
         streamFile(exchange, file, filename);
         // 记录下载统计
-        DownloadStatService.getInstance().record(toolId, "FILE", "unknown", HttpUtil.clientIp(exchange));
+        DownloadStatService.getInstance().record(toolId, "FILE", platform, HttpUtil.clientIp(exchange));
     }
 
     // ============== GET /d/{toolId} ==============
@@ -328,8 +345,12 @@ public final class PublicApiHandler implements HttpHandler {
         }
         String script = BootstrapService.getInstance().generateScriptForTool(toolId, platform);
         String filename = "win".equals(platform) ? "install.bat" : "install.sh";
-        byte[] body = script.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+        // Windows bat must be GBK (ANSI 936) so cmd.exe parses it correctly;
+        // Linux shell script stays UTF-8.
+        boolean win = "win".equals(platform);
+        Charset scriptCharset = win ? Charset.forName("GBK") : StandardCharsets.UTF_8;
+        byte[] body = script.getBytes(scriptCharset);
+        exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=" + (win ? "gbk" : "utf-8"));
         exchange.getResponseHeaders().set("Content-Disposition", HttpUtil.contentDisposition(filename));
         exchange.getResponseHeaders().set("Content-Length", String.valueOf(body.length));
         exchange.sendResponseHeaders(200, body.length);

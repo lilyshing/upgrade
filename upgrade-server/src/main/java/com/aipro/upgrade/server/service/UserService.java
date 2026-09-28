@@ -100,7 +100,7 @@ public final class UserService {
         List<AdminUser> list = new ArrayList<>();
         try (Connection conn = DatabaseManager.getInstance().getConnection();
              PreparedStatement ps = conn.prepareStatement(
-                     "SELECT id, username, role, status, display_name, must_change_pwd, created_at, last_login_at "
+                     "SELECT id, username, password_hash, role, status, display_name, must_change_pwd, created_at, last_login_at "
                              + "FROM admin_user ORDER BY id")) {
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -208,7 +208,7 @@ public final class UserService {
         if (target.status.equals(status)) {
             return;
         }
-        if ("ACTIVE".equals(target.role) && "ADMIN".equals(target.role) && "DISABLED".equals(status)) {
+        if ("ADMIN".equals(target.role) && "ACTIVE".equals(target.status) && "DISABLED".equals(status)) {
             int adminCount = countActiveAdmins();
             if (adminCount <= 1) {
                 throw new IllegalStateException("不可禁用最后一个 ACTIVE 状态的 ADMIN");
