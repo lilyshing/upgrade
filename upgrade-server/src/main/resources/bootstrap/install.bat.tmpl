@@ -1,0 +1,232 @@
+@echo off
+chcp 65001 >nul
+setlocal enabledelayedexpansion
+
+REM ============================================================
+REM   自动升级模块 - Bootstrap Installer (Windows)
+REM   服务器动态生成，内嵌 TOOL_ID / SERVER_URL / PLATFORM
+REM   不依赖 Java，使用 curl 或 PowerShell 下载本体
+REM ============================================================
+
+REM === 内嵌变量（服务器注入） ===
+set "TOOL_ID={{TOOL_ID}}"
+set "SERVER_URL={{SERVER_URL}}"
+set "PLATFORM={{PLATFORM}}"
+
+REM === 解析命令行参数 ===
+set "INSTALL_DIR="
+set "OVERRIDE_PLATFORM="
+set "NO_START=0"
+:parse
+if "%~1"=="" goto parsed
+if /i "%~1"=="--no-start" (
+    set "NO_START=1"
+    shift
+    goto parse
+)
+echo %~1 | findstr /r "^--dir=" >nul && (
+    set "INSTALL_DIR=%~1"
+    set "INSTALL_DIR=!INSTALL_DIR:~6!"
+    shift
+    goto parse
+)
+echo %~1 | findstr /r "^--platform=" >nul && (
+    set "OVERRIDE_PLATFORM=%~1"
+    set "OVERRIDE_PLATFORM=!OVERRIDE_PLATFORM:~11!"
+    shift
+    goto parse
+)
+shift
+goto parse
+:parsed
+
+REM 应用平台覆盖
+if defined OVERRIDE_PLATFORM set "PLATFORM=!OVERRIDE_PLATFORM!"
+
+REM === 默认安装目录 ===
+if "!INSTALL_DIR!"=="" set "INSTALL_DIR=.\%TOOL_ID%"
+
+REM === 平台检测 ===
+if /i "!PLATFORM!"=="auto" set "PLATFORM=win"
+
+echo [INFO] 工具: %TOOL_ID%  平台: %PLATFORM%  服务器: %SERVER_URL%
+echo [INFO] 落地目录: %INSTALL_DIR%
+
+REM === 选择下载工具 ===
+set "DL="
+where curl >nul 2>nul && set "DL=curl"
+if "!DL!"=="" where powershell >nul 2>nul && set "DL=ps"
+if "!DL!"=="" (
+    echo [ERR] 未找到 curl 或 powershell，无法下载。退出码 6。
+    exit /b 6
+)
+
+REM === 创建工作目录 ===
+if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" 2>nul
+if not exist "%INSTALL_DIR%" (
+    echo [ERR] 创建目录失败。退出码 4。
+    exit /b 4
+)
+
+REM === 拉取清单 ===
+set "MANIFEST=%INSTALL_DIR%\.manifest.kv"
+set "BOOT_URL=%SERVER_URL%/api/bootstrap/%TOOL_ID%?platform=%PLATFORM%^&format=kv"
+echo [INFO] 拉取清单: %BOOT_URL%
+call :download "%BOOT_URL%" "%MANIFEST%"
+if errorlevel 1 (
+    echo [ERR] 拉取清单失败。退出码 1。
+    exit /b 1
+)
+
+REM === 解析清单 ===
+set "VER="
+set "START_CMD="
+set "FILE_COUNT=0"
+for /f "usebackq tokens=1,* delims==" %%a in ("%MANIFEST%") do (
+    if "%%a"=="VERSION" set "VER=%%b"
+    if "%%a"=="START_COMMAND" set "START_CMD=%%b"
+    if "%%a"=="FILE_COUNT" set "FILE_COUNT=%%b"
+)
+if "%FILE_COUNT%"=="0" (
+    echo [ERR] 清单无文件信息。退出码 1。
+    exit /b 1
+)
+echo [INFO] 版本 %VER%  共 %FILE_COUNT% 个文件
+
+REM === 逐文件下载 ===
+set "i=0"
+:fileloop
+set /a "i+=1"
+if !i! gtr %FILE_COUNT% goto filedone
+
+REM 从清单提取 FILE_i 行
+for /f "usebackq tokens=1,* delims==" %%a in ("%MANIFEST%") do (
+    if "%%a"=="FILE_!i!" set "FILE_LINE=%%b"
+)
+
+REM 解析 path|sha256|size
+set "FNAME=!FILE_LINE!"
+for /f "tokens=1,2,3 delims=|" %%a in ("!FILE_LINE!") do (
+    set "FNAME=%%a"
+    set "FSHA=%%b"
+    set "FSIZE=%%c"
+)
+
+set "DEST=%INSTALL_DIR%\!FNAME!"
+REM 创建子目录（如 config/默认参数.properties）
+for %%I in ("!DEST!") do if not exist "%%~dpI" mkdir "%%~dpI"
+
+echo [INFO] 下载 [!i!/%FILE_COUNT%] !FNAME! ...
+
+REM 离线兜底：已存在且校验通过则跳过
+if exist "!DEST!" (
+    call :sha256 "!DEST!" ACTUAL
+    if /i "!ACTUAL!"=="!FSHA!" (
+        echo [INFO] 已存在且校验通过，跳过 !FNAME!
+        goto fileloop
+    )
+)
+
+REM URL 编码文件名（含中文）
+call :urlencode "!FNAME!" ENC_NAME
+set "FILE_URL=%SERVER_URL%/api/file/tool/%TOOL_ID%/%VER%/!ENC_NAME!"
+call :download "!FILE_URL!" "!DEST!"
+if errorlevel 1 (
+    echo [ERR] 下载失败 !FNAME!。退出码 2。
+    exit /b 2
+)
+
+REM SHA-256 校验
+call :sha256 "!DEST!" ACTUAL
+if /i "!ACTUAL!" neq "!FSHA!" (
+    echo [ERR] 校验失败 !FNAME!
+    echo [ERR] 期望=!FSHA!  实际=!ACTUAL!
+    exit /b 3
+)
+echo [INFO] 校验通过 !FNAME!
+goto fileloop
+:filedone
+
+REM === 写日志 ===
+set "TS=%date:~0,4%%date:~5,2%%date:~8,2%_%time:~0,2%%time:~3,2%%time:~6,2%"
+set "TS=%TS: =0%"
+set "LOG_FILE=%INSTALL_DIR%\install_%TS%.log"
+echo [%date% %time%] 安装完成 tool=%TOOL_ID% ver=%VER% dir=%INSTALL_DIR%> "%LOG_FILE%"
+echo [INFO] 日志: %LOG_FILE%
+
+REM === 启动 ===
+if "%NO_START%"=="1" (
+    echo [INFO] --no-start 跳过启动
+    exit /b 0
+)
+
+echo %START_CMD% | findstr /i "java" >nul && (
+    where java >nul 2>nul || (
+        echo [ERR] 未检测到 Java，请先安装 JDK 1.8 后重试。退出码 5。
+        exit /b 5
+    )
+)
+echo [INFO] 启动: %START_CMD%
+cd /d "%INSTALL_DIR%"
+cmd /c "%START_CMD%"
+exit /b %errorlevel%
+
+REM ============================================================
+REM 子程序：download（含重试与断点续传）
+REM   %1=URL  %2=OUT
+REM ============================================================
+:download
+set "URL=%~1"
+set "OUT=%~2"
+set "RETRY=0"
+:dl_retry
+if "%DL%"=="curl" (
+    curl -L --retry 3 -C - -o "%OUT%" "%URL%"
+) else (
+    REM PowerShell 兜底（带 Range 续传）
+    powershell -NoProfile -Command "$h=@{}; if(Test-Path '%OUT%'){$h.Range='bytes='+([IO.FileInfo]'%OUT%').Length+'-'}; IWR -Uri '%URL%' -Headers $h -OutFile '%OUT%' -UseBasicParsing"
+)
+if %errorlevel%==0 exit /b 0
+set /a "RETRY+=1"
+if !RETRY! lss 3 (
+    echo [WARN] 第 !RETRY! 次失败，重试中...
+    powershell -NoProfile -Command "Start-Sleep -Seconds (2 * [Math]::Pow(2,!RETRY!-1))" 2>nul
+    if errorlevel 1 ping -n 3 127.0.0.1 >nul
+    goto dl_retry
+)
+exit /b 1
+
+REM ============================================================
+REM 子程序：sha256（返回 ACTUAL 变量）
+REM   %1=文件  %2=输出变量名
+REM ============================================================
+:sha256
+set "F=%~1"
+set "VAR=%~2"
+set "ACTUAL="
+for /f "skip=1 tokens=* delims=" %%h in ('certutil -hashfile "!F!" SHA256 2^>nul') do (
+    if "!ACTUAL!"=="" set "ACTUAL=%%h"
+)
+REM certutil 输出第 2 行是哈希值
+set "%VAR%=%ACTUAL%"
+goto :eof
+
+REM ============================================================
+REM 子程序：urlencode（返回 ENC_NAME 变量）
+REM   %1=输入字符串
+REM ============================================================
+:urlencode
+set "S=%~1"
+set "ENC_NAME="
+:urlenc_loop
+if "%S%"=="" goto urlenc_done
+set "C=%S:~0,1%"
+set "S=%S:~1%"
+echo !C!| findstr /r "^[A-Za-z0-9./_-]$" >nul && (
+    set "ENC_NAME=!ENC_NAME!!C!"
+) || (
+    for /f "delims=" %%h in ('powershell -NoProfile -Command "[uri]::EscapeDataString('!C!')"') do set "ENC_NAME=!ENC_NAME!%%h"
+)
+goto urlenc_loop
+:urlenc_done
+goto :eof

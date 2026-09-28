@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- ===== 客户端 SDK 模块：被宿主以 Maven 依赖引用 ===== -->
+    <parent>
+        <groupId>com.aipro.upgrade</groupId>
+        <artifactId>upgrade-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>upgrade-client</artifactId>
+    <packaging>jar</packaging>
+
+    <name>Upgrade Client SDK</name>
+    <description>客户端升级 SDK：以 jar 形式被宿主引用，零侵入接入升级流程</description>
+
+    <!-- 客户端 SDK 不引入任何外部依赖，全部使用 JDK 自带能力：
+         HttpURLConnection（HTTP）、MessageDigest（SHA-256）、Swing（默认弹窗）、
+         自实现的极简 JSON 解析（避免给宿主引入 json 库） -->
+    <dependencies>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>upgrade-client</finalName>
+    </build>
+</project>

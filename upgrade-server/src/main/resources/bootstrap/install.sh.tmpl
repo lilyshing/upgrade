@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# ============================================================
+#   自动升级模块 - Bootstrap Installer (Linux)
+#   服务器动态生成，内嵌 TOOL_ID / SERVER_URL / PLATFORM
+#   不依赖 Java，使用 curl 或 wget 下载本体
+# ============================================================
+set -euo pipefail
+
+# === 内嵌变量（服务器注入） ===
+TOOL_ID="{{TOOL_ID}}"
+SERVER_URL="{{SERVER_URL}}"
+PLATFORM="{{PLATFORM}}"
+
+# === 解析命令行参数 ===
+INSTALL_DIR=""
+OVERRIDE_PLATFORM=""
+NO_START=0
+for arg in "$@"; do
+    case "$arg" in
+        --dir=*)
+            INSTALL_DIR="${arg#--dir=}"
+            ;;
+        --platform=*)
+            OVERRIDE_PLATFORM="${arg#--platform=}"
+            ;;
+        --no-start)
+            NO_START=1
+            ;;
+        *)
+            echo "[ERR] 未知参数: $arg"
+            exit 7
+            ;;
+    esac
+done
+[ -n "$OVERRIDE_PLATFORM" ] && PLATFORM="$OVERRIDE_PLATFORM"
+
+# === 默认安装目录 ===
+[ -z "$INSTALL_DIR" ] && INSTALL_DIR="./$TOOL_ID"
+
+# === 平台检测 ===
+[ "$PLATFORM" = "auto" ] && PLATFORM="linux"
+
+echo "[INFO] 工具: $TOOL_ID  平台: $PLATFORM  服务器: $SERVER_URL"
+echo "[INFO] 落地目录: $INSTALL_DIR"
+
+# === 选择下载工具 ===
+DL=""
+if command -v curl >/dev/null 2>&1; then DL="curl"
+elif command -v wget >/dev/null 2>&1; then DL="wget"
+else
+    echo "[ERR] 未找到 curl/wget。退出码 6。"
+    exit 6
+fi
+
+# === 工作目录 ===
+mkdir -p "$INSTALL_DIR" || {
+    echo "[ERR] 创建目录失败。退出码 4。"
+    exit 4
+}
+
+# === 拉取清单 ===
+MANIFEST="$INSTALL_DIR/.manifest.kv"
+BOOT_URL="$SERVER_URL/api/bootstrap/$TOOL_ID?platform=$PLATFORM&format=kv"
+echo "[INFO] 拉取清单: $BOOT_URL"
+download "$BOOT_URL" "$MANIFEST" || {
+    echo "[ERR] 拉取清单失败。退出码 1。"
+    exit 1
+}
+
+# === 解析清单 ===
+VER=""
+START_CMD=""
+FILE_COUNT=0
+declare -a F_PATH F_SHA F_SIZE
+while IFS='=' read -r k v; do
+    case "$k" in
+        VERSION)        VER="$v" ;;
+        START_COMMAND)  START_CMD="$v" ;;
+        FILE_COUNT)     FILE_COUNT="$v" ;;
+        FILE_*)
+            idx="${k#FILE_}"
+            IFS='|' read -r p s z <<< "$v"
+            F_PATH[idx]="$p"
+            F_SHA[idx]="$s"
+            F_SIZE[idx]="$z"
+            ;;
+    esac
+done < "$MANIFEST"
+
+if [ "$FILE_COUNT" -eq 0 ]; then
+    echo "[ERR] 清单无文件信息。退出码 1。"
+    exit 1
+fi
+echo "[INFO] 版本 $VER  共 $FILE_COUNT 个文件"
+
+# === 逐文件下载 ===
+for ((i=1; i<=FILE_COUNT; i++)); do
+    FNAME="${F_PATH[i]}"
+    DEST="$INSTALL_DIR/$FNAME"
+    mkdir -p "$(dirname "$DEST")"
+    echo "[INFO] 下载 [$i/$FILE_COUNT] $FNAME ..."
+
+    # 离线兜底：已存在且校验通过则跳过
+    if [ -f "$DEST" ]; then
+        ACTUAL=$(sha256sum "$DEST" | awk '{print $1}')
+        if [ "$ACTUAL" = "${F_SHA[i]}" ]; then
+            echo "[INFO] 已存在且校验通过，跳过 $FNAME"
+            continue
+        fi
+    fi
+
+    # URL 编码文件名（含中文）
+    ENC_NAME=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$FNAME" 2>/dev/null || echo "$FNAME")
+    FILE_URL="$SERVER_URL/api/file/tool/$TOOL_ID/$VER/$ENC_NAME"
+    download "$FILE_URL" "$DEST" || {
+        echo "[ERR] 下载失败 $FNAME。退出码 2。"
+        exit 2
+    }
+    ACTUAL=$(sha256sum "$DEST" | awk '{print $1}')
+    if [ "$ACTUAL" != "${F_SHA[i]}" ]; then
+        echo "[ERR] 校验失败 $FNAME"
+        echo "[ERR] 期望=${F_SHA[i]}  实际=$ACTUAL"
+        exit 3
+    fi
+    echo "[INFO] 校验通过 $FNAME"
+done
+
+# === 写日志 ===
+LOG_FILE="$INSTALL_DIR/install_$(date +%Y%m%d_%H%M%S).log"
+{
+    echo "[$(date '+%F %T')] 安装完成 tool=$TOOL_ID ver=$VER dir=$INSTALL_DIR"
+} > "$LOG_FILE"
+echo "[INFO] 日志: $LOG_FILE"
+
+# === 启动 ===
+if [ "$NO_START" = "1" ]; then
+    echo "[INFO] --no-start 跳过启动"
+    exit 0
+fi
+case "$START_CMD" in
+    *java*)
+        command -v java >/dev/null || {
+            echo "[ERR] 未检测到 Java，请先安装 JDK 1.8 后重试。退出码 5。"
+            exit 5
+        }
+        ;;
+esac
+echo "[INFO] 启动: $START_CMD"
+cd "$INSTALL_DIR"
+exec $START_CMD
+
+# ============================================================
+# 函数：download（含重试与断点续传）
+#   $1=URL  $2=OUT
+# ============================================================
+download() {
+    local url="$1" out="$2" retry=0 rc=0
+    while :; do
+        if [ "$DL" = "curl" ]; then
+            curl -fL --retry 3 -C - -o "$out" "$url" && return 0
+        else
+            wget -c -O "$out" "$url" && return 0
+        fi
+        rc=$?
+        retry=$((retry + 1))
+        if [ "$retry" -ge 3 ]; then
+            echo "[WARN] 重试 $retry/3 失败"
+            return $rc
+        fi
+        echo "[WARN] 第 $retry 次失败，重试中..."
+        sleep $((2 * (2 ** (retry - 1))))
+    done
+}

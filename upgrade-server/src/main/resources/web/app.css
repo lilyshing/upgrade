@@ -1,0 +1,56 @@
+/* 自动升级管理后台 - 简洁样式（PRD §3.2 风格） */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: "Microsoft YaHei", Arial, sans-serif; font-size: 14px; color: #333; background: #f5f6f8; }
+a { color: #1976d2; text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { cursor: pointer; padding: 6px 14px; border: 1px solid #1976d2; background: #1976d2; color: #fff; border-radius: 4px; font-size: 14px; }
+button:hover { background: #155a9f; }
+button.secondary { background: #fff; color: #1976d2; }
+button.danger { background: #d32f2f; border-color: #d32f2f; }
+button.ghost { background: transparent; color: #666; border-color: #ccc; }
+input, select, textarea { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+input[type=file] { padding: 3px; }
+table { width: 100%; border-collapse: collapse; background: #fff; margin: 12px 0; }
+th, td { padding: 8px 10px; border-bottom: 1px solid #eee; text-align: left; }
+th { background: #fafbfc; color: #555; font-weight: 600; }
+tr:hover td { background: #f9f9fb; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+.card { background: #fff; border: 1px solid #e6e8eb; border-radius: 6px; padding: 16px; margin: 12px 0; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+.card h2 { font-size: 18px; color: #1976d2; margin-bottom: 12px; border-bottom: 2px solid #e6e8eb; padding-bottom: 8px; }
+.header { background: #1a237e; color: #fff; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; }
+.header h1 { font-size: 18px; }
+.header .user-area { font-size: 13px; }
+.nav { background: #283593; padding: 0 24px; display: flex; gap: 4px; }
+.nav a { color: #c5cae9; padding: 10px 14px; text-decoration: none; font-size: 14px; }
+.nav a:hover, .nav a.active { color: #fff; background: #1a237e; border-radius: 4px 4px 0 0; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.row > * { flex: 0 0 auto; }
+.metric { display: inline-block; margin-right: 24px; }
+.metric .label { color: #888; font-size: 12px; }
+.metric .value { font-size: 22px; font-weight: 600; color: #1976d2; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+.tag-published { background: #e8f5e9; color: #2e7d32; }
+.tag-draft { background: #fff8e1; color: #f57f17; }
+.tag-offline { background: #ffebee; color: #c62828; }
+.tag-admin { background: #e3f2fd; color: #1565c0; }
+.tag-user { background: #f3e5f5; color: #7b1fa2; }
+.tag-active { background: #e8f5e9; color: #2e7d32; }
+.tag-disabled { background: #ffebee; color: #c62828; }
+.login-box { max-width: 360px; margin: 80px auto; background: #fff; padding: 24px; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,.1); }
+.login-box h2 { text-align: center; margin-bottom: 16px; color: #1a237e; }
+.login-box .form-group { margin-bottom: 12px; }
+.login-box label { display: block; margin-bottom: 4px; color: #555; }
+.login-box input { width: 100%; }
+.login-box button { width: 100%; padding: 10px; }
+.message { padding: 10px 12px; border-radius: 4px; margin-bottom: 12px; }
+.message.error { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
+.message.success { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+textarea { width: 100%; min-height: 60px; font-family: monospace; }
+textarea.log { background: #1e1e1e; color: #ddd; padding: 10px; border-radius: 4px; min-height: 360px; }
+.muted { color: #888; font-size: 12px; }
+.mb { margin-bottom: 12px; }
+.mt { margin-top: 12px; }
+.flex-between { display: flex; justify-content: space-between; align-items: center; }
+code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-family: Consolas, monospace; color: #d32f2f; }
+ul { padding-left: 20px; }
+li { margin: 4px 0; }

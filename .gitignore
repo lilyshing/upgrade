@@ -1,0 +1,32 @@
+# Maven 构建产物
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# 服务器运行时数据
+upgrade.db
+upgrade.db-journal
+upgrade.db-wal
+upgrade.db-shm
+toolfiles/
+versionfiles/
+upgrade-server.pid
+upgrade-server.out
+
+# 日志
+*.log
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.bak
